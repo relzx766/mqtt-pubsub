@@ -4,12 +4,12 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.RemovalCause;
 import com.github.benmanes.caffeine.cache.RemovalListener;
+import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.mqtt.MqttPublishMessage;
 import io.netty.handler.codec.mqtt.MqttQoS;
 import io.netty.handler.codec.mqtt.MqttTopicSubscription;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
-import org.checkerframework.checker.nullness.qual.Nullable;
 import org.relzx.pubsub.broker.listener.MqttMessageListener;
 import org.relzx.pubsub.broker.properties.BrokerProperties;
 import org.relzx.pubsub.broker.properties.factory.BrokerPropertiesFactory;
@@ -39,7 +39,7 @@ public class PublishService {
     private final ConnectService connectService = ConnectService.getInstance();
     private final Map<String, MqttPublishMessage> retainMessage = new HashMap<>();
     private Cache<String, MqttPublishMessage> messageCache;
-    private final BrokerProperties properties= BrokerPropertiesFactory.getInstance();
+    private final BrokerProperties properties = BrokerPropertiesFactory.getInstance();
 
     private PublishService() {
         initCache();
@@ -75,9 +75,7 @@ public class PublishService {
                 .maximumSize(properties.getMessageCacheMaxSize())
                 .initialCapacity(properties.getMessageCacheInitCapacity())
                 .expireAfterWrite(properties.getMessageCacheTime(), TimeUnit.MILLISECONDS)
-                .removalListener((RemovalListener<String, MqttPublishMessage>) (key, value, cause) -> {
-                    log.warn("消息=>{} 被丢弃,原因:{}",key,cause);
-                })
+                .removalListener(this::onCacheInvalidate)
                 .build();
     }
 
@@ -94,7 +92,7 @@ public class PublishService {
             Set<MqttMessageListener> listenerSet = listenerMap.get(topic);
             if (CollectionUtil.isNotEmpty(listenerSet)) {
                 for (MqttMessageListener listener : listenerSet) {
-                    listener.onMessage(message);
+                    dispatch(listener, message);
                 }
             }
             if (MqttQoS.AT_LEAST_ONCE.equals(qoS)) {
@@ -105,7 +103,7 @@ public class PublishService {
             broker.pubrec(packetId, client.getChannel());
         }
         if (MqttQoS.EXACTLY_ONCE.equals(qoS) || MqttQoS.AT_LEAST_ONCE.equals(qoS)) {
-            messageCache.put(MessageUtil.generateId(client.getClientIdentifier(), packetId), message);
+            cacheMessage(MessageUtil.generateId(client.getClientIdentifier(), packetId), message);
         }
     }
 
@@ -119,12 +117,12 @@ public class PublishService {
             Set<MqttMessageListener> listenerSet = listenerMap.get(topic);
             if (CollectionUtil.isNotEmpty(listenerSet)) {
                 for (MqttMessageListener listener : listenerSet) {
-                    listener.onMessage(message);
+                    dispatch(listener, message);
                 }
             }
             broker.pubcomp(message.variableHeader().packetId(), client.getChannel());
-        }else {
-            log.warn("消息丢失，找不到消息=>{}:{},或已超出最大处理期限",client.getClientIdentifier(),messageId);
+        } else {
+            log.warn("消息丢失，找不到消息=>{}:{},或已超出最大处理期限", client.getClientIdentifier(), messageId);
         }
 
     }
@@ -137,16 +135,17 @@ public class PublishService {
         if (message != null) {
             String topic = message.variableHeader().topicName();
             Set<MqttMessageListener> listenerSet = listenerMap.get(topic);
+            MqttPublishMessage dueMessage = MqttMessageUtil.duePublishMessage(message);
             if (CollectionUtil.isNotEmpty(listenerSet)) {
                 for (MqttMessageListener listener : listenerSet) {
                     ClientInfo clientInfo = listener.getClientInfo();
                     if (clientInfo.getClientIdentifier().equals(subscriber)) {
-                        listener.onMessage(MqttMessageUtil.duePublishMessage(message));
+                        dispatch(listener, dueMessage);
                     }
                 }
             }
-        }else {
-            log.warn("消息丢失，找不到消息=>{}:{},或已超出最大处理期限",subscriber,messageId);
+        } else {
+            log.warn("消息丢失，找不到消息=>{}:{},或已超出最大处理期限", subscriber, messageId);
         }
 
     }
@@ -155,7 +154,7 @@ public class PublishService {
         ClientInfo client = event.getClient();
         if (client.isWillFlag()) {
             int qos = client.getWillQos();
-            int messageId=MqttQoS.AT_LEAST_ONCE.value()==qos?-1:MessageIdUtil.getForBroker();
+            int messageId = MqttQoS.AT_LEAST_ONCE.value() == qos ? -1 : MessageIdUtil.getForBroker();
             MqttPublishMessage message = MqttMessageUtil.publishMessage(client.getWillTopic(), client.getWillMessage(), qos, messageId, client.isWillRetain());
             EventBusUtil.postAsync(new PublishRecEvent(client, message));
         }
@@ -182,7 +181,26 @@ public class PublishService {
         String topic = subscription.topicFilter();
         MqttPublishMessage message = retainMessage.get(topic);
         if (message != null) {
-            listener.onMessage(message);
+            dispatch(listener, message);
         }
+    }
+
+    private void cacheMessage(String id, MqttPublishMessage message) {
+        messageCache.put(id, message);
+    }
+
+    private void dispatch(MqttMessageListener listener, MqttPublishMessage message){
+        //编码器编码后会将引用计数-1,所以这里需要先加起来
+        message.retain();
+        listener.onMessage(message);
+    }
+    private void onCacheInvalidate(String key, MqttPublishMessage value, RemovalCause cause){
+        if (value != null) {
+            ByteBuf buf = value.payload();
+            if (buf.refCnt() > 0) {
+                buf.release();
+            }
+        }
+        log.warn("消息=>{} 被丢弃,原因:{}", key, cause);
     }
 }

@@ -26,12 +26,15 @@ public class Main {
         });
 
         new Thread(()->{
-            long begin = System.nanoTime();
-            for (int i = 0; i < 100000; i++) {
-                client.publish("123",MqttQoS.AT_MOST_ONCE,"hello");
+            for (;;) {
+                try {
+                client.publish("123",MqttQoS.AT_LEAST_ONCE,"hello");
+
+                    Thread.sleep(100);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
             }
-            long end = System.nanoTime();
-            log.info("单次平均耗时:{}  总耗时:{}",(end-begin)/1000000,end-begin);
         }).start();
     }
 }

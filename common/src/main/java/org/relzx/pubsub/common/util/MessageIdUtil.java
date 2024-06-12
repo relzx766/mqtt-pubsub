@@ -44,7 +44,7 @@ public class MessageIdUtil {
             return id.id;
         }
 
-        return -1;
+        return getForClient();
     }
 
     public static synchronized int getForBroker() {
@@ -58,7 +58,7 @@ public class MessageIdUtil {
             BROKER_INDEX++;
             return id.id;
         }
-        return -1;
+        return getForBroker();
     }
 
     public static boolean isForClient(int id) {

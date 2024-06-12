@@ -147,10 +147,17 @@ public class MqttMessageUtil {
                 Unpooled.buffer().writeBytes(payload));
     }
     public static MqttPublishMessage duePublishMessage(MqttPublishMessage message){
+        ByteBuf payload = message.payload();
+        byte[] bytes;
+        if (payload.hasArray()) {
+            bytes = payload.array();
+        } else {
+            bytes = new byte[payload.readableBytes()];
+            payload.getBytes(payload.readerIndex(), bytes);
+        }
         MqttFixedHeader fixedHeader = message.fixedHeader();
         MqttPublishVariableHeader variableHeader = message.variableHeader();
-        ByteBuf payload = message.payload();
-        return publishMessage(variableHeader.topicName(),payload.array(),fixedHeader.qosLevel(), fixedHeader.isRetain(), variableHeader.packetId(),true);
+        return publishMessage(variableHeader.topicName(),bytes,fixedHeader.qosLevel(), fixedHeader.isRetain(), variableHeader.packetId(),true);
     }
     public static MqttMessage pubCompMessage(int messageId) {
         return MqttMessageFactory.newMessage(

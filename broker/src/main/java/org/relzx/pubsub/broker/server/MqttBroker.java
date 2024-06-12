@@ -97,7 +97,7 @@ public class MqttBroker implements Broker, Broker.Callback {
 
     @Override
     public void publish(MqttPublishMessage message, Channel channel) {
-        channel.writeAndFlush(message);
+         channel.writeAndFlush(message);
         ClientInfo clientInfo = connectService.getClientInfo(channel);
         EventBusUtil.postAsync(new PublishEvent(
                 clientInfo,
@@ -219,8 +219,6 @@ public class MqttBroker implements Broker, Broker.Callback {
         } catch (ReqRejectException e) {
             log.warn("reject publish message from {},cause:{}", clientInfo.getClientIdentifier(), e.getMessage());
         }
-
-
     }
 
     @Override
